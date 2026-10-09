@@ -31,7 +31,19 @@ def testing(agent_state, dataset_path, eda_report):
             if test_cleaned_data.shape[0]/dataset.shape[0] < 0.8:
                 return False, "The cleaned dataset retains less than 80% of the original data, which may indicate excessive cleaning."
             else:
-                return True, "Test passed successfully."
+                if test_cleaned_data.isnull().sum().sum() == dataset.isnull().sum().sum():
+                    return False, "The cleaned dataset has the same number of null values as the original dataset, which may indicate that no cleaning was performed."
+                else:
+                    
+                    total_rows = dataset.shape[0]
+                    imputable_cols = [col for col in eda_report["nulls"] if 0 < eda_report["nulls"][col] / total_rows < 0.8]
+                    failed_cols = [col for col in imputable_cols if test_cleaned_data[col].isnull().sum() > 0]
+                    
+                    if failed_cols:
+                            detalles = {col: test_cleaned_data[col].isnull().sum() for col in failed_cols}
+                            return False, f"Cleaning incomplete. Imputable columns still have nulls: {detalles}"
+                    else:
+                        return True, "Test passed successfully."
 
     except Exception as e:
         return False, f"Test failed with error: {str(e)}"
