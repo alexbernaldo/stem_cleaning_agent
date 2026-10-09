@@ -1,4 +1,4 @@
-# stem_agent_challenge
+# stem_cleaning_agent
 
 A prototype of an agent that writes its own data-cleaning function. You give it a CSV, GPT-4o generates the code, and when that code crashes at runtime the real `stderr` goes back into the model on the next turn. The version that passes the validator is frozen into `agent_state_<n>.json`.
 
@@ -10,6 +10,8 @@ A prototype of an agent that writes its own data-cleaning function. You give it 
 
 **EDA → `eda_report` → cleaning is a hard pipeline, and the report cannot be bypassed.** The cleaning phase receives the whole `eda_report` dictionary as its only context, serialized into the user prompt (`json.dumps(eda_report, indent=2)`, `src/stem_core.py:64`). `metaprompt_cleaning.txt` requires every threshold to come from that report and states the rule literally: *"thresholds not derived from eda_report are a contract violation"*. The same rule reappears in the `REJECTION CONDITIONS` list at the end of the file. In practice this means no `fillna(0)` and no hardcoded IQR constant: the model has to cite the per-column null counts, the IQR and z-score outlier candidates, and the dtype mismatches that the EDA module measured, in its `reasoning` field.
 
+**Missingness is split into real nulls and pseudo-nulls before anything is imputed.** The EDA module counts string stand-ins for missingness (`"N/A"`, `"--"`, `"nan"`, empty and whitespace-only strings) per column under the `pseudo_nulls` key, the cleaning metaprompt orders those values to be replaced with NaN *before* any imputation, and the split turns into a fixed, verifiable rule in the validator: a column whose null rate is ≥ 0.8 is dropped entirely, a column between 0 and 0.8 must come out of `clean_dataframe` with zero nulls or the frame is rejected (`src/test_agent.py:39-44`).
+
 **`freeze_agent()` persists the winner.** Once the code runs and passes validation, the three `agent_state` keys are written to `agent_state_<i+1>.json` with `indent=4`, and the phase ends. Those files are in the `.gitignore`.
 
 **The model writes the system prompt that governs its deployed version.** `specialized_system_prompt` is one of the three mandatory `agent_state` keys, sits between `reasoning` and `python_code`, and carries second-person decision rules for nulls, outliers, and dtypes derived from that dataset's characteristics, plus the conditions under which it must escalate instead of fixing things on its own. What ends up frozen in `agent_state_<n>.json` is a prompt next to the code.
@@ -18,7 +20,7 @@ A prototype of an agent that writes its own data-cleaning function. You give it 
 
 Two phases, each with its own metaprompt and up to 20 attempts (`MAX_MUTATIONS = 20`, `src/stem_core.py:10`), so 40 API calls in the worst case.
 
-The EDA phase asks for a generic diagnostic script. `sandbox_eda.py` prepends the dataset path and the line `dataset = pd.read_csv(DATASET_PATH)`, runs it with `subprocess.run(["python", f], capture_output=True, text=True, timeout=30)`, and pulls the `eda_report` dict out of stdout, because the scaffold appends `print(json.dumps(eda_report, default=str))` to the generated script. Null counts are cast to `int` before being returned.
+The EDA phase asks for a generic diagnostic script. `sandbox_eda.py` prepends the dataset path and the line `dataset = pd.read_csv(DATASET_PATH)`, runs it with `subprocess.run([sys.executable, f], capture_output=True, text=True, timeout=30)`, and pulls the `eda_report` dict out of stdout, because the scaffold appends `print(json.dumps(eda_report, default=str))` to the generated script. Null counts are cast to `int` before being returned.
 
 The cleaning phase gets the full `eda_report` as its only context. `sandbox.py` prepends `DATASET_PATH` and `eda_report = {...}` to the generated code and runs it the same way. If the subprocess returns `returncode == 0`, the frame goes to the validator.
 
@@ -27,7 +29,7 @@ Both failure cases re-inject the same message pair: the complete `json.dumps(age
 ## Architecture
 
 ```
-stem_agent_challenge/
+stem_cleaning_agent/
 ├── README.md
 ├── .gitignore                     .env, __pycache__/, agent_state_*.json
 ├── data/
@@ -35,16 +37,16 @@ stem_agent_challenge/
 │   └── dirty_dataset.csv             200 synthetic rows with noise
 └── src/
     ├── stem_core.py          93   both loops, the API call and freeze_agent()
-    ├── sandbox.py            29   subprocess for the cleaning code; returns stderr or stdout
-    ├── sandbox_eda.py        32   subprocess for the EDA code; appends the print and returns eda_report
-    ├── test_agent.py         36   validator: exec() of the code and call to clean_dataframe()
+    ├── sandbox.py            30   subprocess for the cleaning code; returns stderr or stdout
+    ├── sandbox_eda.py        33   subprocess for the EDA code; appends the print and returns eda_report
+    ├── test_agent.py         48   validator: exec(); checks row retention, nulls and imputation
     ├── make_dummy_data.py    61   generates dirty_dataset.csv
     ├── metaprompt_eda.txt         output and interface contract for the EDA module
     ├── metaprompt_cleaning.txt    output and interface contract for the CLEAN module
     └── metaprompt_og.txt          earlier metaprompt; no import loads it
 ```
 
-That is 251 lines of Python across five files.
+That is 265 lines of Python across five files.
 
 `make_dummy_data.py` puts four kinds of noise into 200 rows: nulls per column between 7 % and 15 %, outliers in `age` and `purchase_amount`, ten invalid strings (`"N/A"`, `"--"`, `"nan"`, `" "`) and fifteen impossible dates (`"2024/13/01"`, `"31-02-2024"`, `"2024.01.32"`). It also forces `purchase_amount` and `purchase_date` to `object` to reproduce dtype mismatches.
 
@@ -90,7 +92,7 @@ and change the call on line 94 to `os.path.join('data', 'dirty_dataset.csv')`.
 
 **The model writes the prompt that governs its own deployed version.** `specialized_system_prompt` is a required output artifact, not a comment. See "What works" above.
 
-**The output contracts are strict down to key order.** Both metaprompts ask for a JSON object with exactly two or three keys *in that order*, the exact function signature (`run_eda(dataset: pd.DataFrame) -> dict`, `clean_dataframe(df: pd.DataFrame, eda_report: dict) -> pd.DataFrame`), a last line of `eda_report = run_eda(dataset)` in the EDA script, no line-continuation backslashes (`\`), and no `inplace=True` in any pandas operation, with `df[col] = df[col].fillna(value)` versus `df[col].fillna(value, inplace=True)` written into the metaprompt itself. Each file ends with a `REJECTION CONDITIONS` list enumerating what invalidates a response.
+**The output contracts are strict down to key order.** Both metaprompts ask for a JSON object with exactly two or three keys *in that order*, the exact function signature (`run_eda(dataset: pd.DataFrame) -> dict`, `clean_dataframe(df: pd.DataFrame, eda_report: dict) -> pd.DataFrame`), a last line of `eda_report = run_eda(dataset)` in the EDA script, no line-continuation backslashes (`\`), and no `inplace=True` in any pandas operation, with `df[col] = df[col].fillna(value)` versus `df[col].fillna(value, inplace=True)` written into the metaprompt itself. Each file ends with a `REJECTION CONDITIONS` list enumerating what invalidates a response. An EDA report is now invalid without the `pseudo_nulls` key, and the cleaning contract carries the ≥ 0.8 null-rate drop rule and the pre-imputation replacement of `pseudo_nulls` into its remediation instructions.
 
 That requirement about the order of the JSON keys comes from the literature in the References section below, in particular the dsdev.in note on field order in structured output and the OpenAI guide: some models score worse when the keys do not follow the order in which they were declared.
 
@@ -102,16 +104,16 @@ Both metaprompts declare themselves "phase v0.1" and the code is at that level:
 
 - **The sandbox isolates nothing.** `subprocess.run` launches the generated code with the same user, the same filesystem and an open network. The only bound on execution is a 30-second timeout; there is no memory, CPU or network limit.
 - **`test_agent.py` calls `exec()` in its own process**, without isolation, so it can hand the real `dataset` and `eda_report` Python objects to `clean_dataframe`. This is the sharpest edge in the repository and is not flagged as such anywhere.
-- There is no test suite. `test_agent.py` is not a test file: no pytest, no `assert`, no cases. It is the runtime validator the agent approves itself with, and it only measures two things (not empty, keeps ≥ 80 % of rows), so it would pass a cleaner that touches nothing and reject a legitimate one that removes many outliers by design.
+- There is no test suite. `test_agent.py` is not a test file: no pytest, no `assert`, no cases. It is the runtime validator the agent approves itself with, and it measures three things: a non-empty frame, ≥ 80 % of original rows kept (`src/test_agent.py:31`), and every column sitting between 0 and 0.8 null rate in `eda_report` coming out with zero nulls (`src/test_agent.py:39-44`). A cleaner that touches nothing now fails the null-progress check instead of passing, but filling a single cell still passes, and a legitimate one that removes many outliers by design is still rejected.
 - The EDA parser runs `json.loads` over the whole stdout, so any `print()` in the generated code breaks the parse, and what goes back to the model is `"Expecting value: line 1 column 1 (char 0)"` instead of the real cause.
-- The `"python"` binary is invoked instead of `sys.executable`, so on a system without that alias it always fails and the error is blamed on the generated code. Temp files are created with `delete=False` and never removed, so each iteration leaves a `.py` with the generated code in `/tmp`.
+- Temp files are created with `delete=False` and never removed, so each iteration leaves a `.py` with the generated code in `/tmp`.
 - `metaprompt_eda.txt` promises the model the dataset schema (column names and sample rows) and `stem_core.py:37` sends a generic instruction with no schema. The script has to work out each column type on its own.
 - No `retry` and no backoff: one rate limit takes the whole loop down. Failed attempts, costs and timings are not logged; only the winner persists. And nothing reads the `agent_state_<n>.json` afterwards.
 - No license, no CI, no linter. The 68 MB dataset is committed to git.
 
 ## Status and next steps
 
-The happy path is complete in the code — EDA, cleaning, validation and `freeze_agent` — but there is not a single `agent_state_*.json` in the repository or in git history, so no run was ever recorded. `MAX_MUTATIONS` grew commit by commit (5 → 10 → 20) and the large dataset arrived in the last commit, which means the loop has never been measured against the 22,000 real rows.
+The happy path is complete in the code — EDA, cleaning, validation and `freeze_agent` — but no run was ever recorded in git history: the `agent_state_*.json` sitting on the repo root are untracked (`.gitignore` covers them). `MAX_MUTATIONS` grew commit by commit (5 → 10 → 20) and the large dataset arrived in the last commit, which means the loop has never been measured against the 22,000 real rows.
 
 What a v0.2 would need:
 
