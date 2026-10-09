@@ -1,6 +1,7 @@
 import subprocess
 import tempfile
 import json
+import sys
 
 def run_eda(code, dataset_path):
     
@@ -17,7 +18,7 @@ def run_eda(code, dataset_path):
 
         tmp_path = code_file
         
-        result = subprocess.run(["python", tmp_path], capture_output=True, text=True, timeout=30)
+        result = subprocess.run([sys.executable, tmp_path], capture_output=True, text=True, timeout=30)
         
         if result.returncode == 0:
             eda_report = json.loads(result.stdout)
