@@ -21,6 +21,7 @@ You must:
    (b) statistical outlier candidates via IQR and z-score for numeric columns
    (c) dtype mismatches between inferred and expected types
    (d) cardinality anomalies in categorical columns
+   (e) pseudo-null detection — for categorical/string columns, identify values that are string representations of missingness (e.g. "N/A", "null", "None", "--", "Missing", "Unknown", empty strings, whitespace-only strings) and report them as pseudo-null candidates with their frequency count per column.
 3. Produce a self-contained EDA script that writes all diagnostics to a
    structured Python dict named eda_report.
 
@@ -49,6 +50,7 @@ Your script MUST define this function with this EXACT signature:
 The last line of your script MUST assign the result to a variable named exactly eda_report: eda_report = run_eda(dataset)
 NEVER use line continuation characters (\). Use parentheses for multi-line expressions instead.
 When computing z-scores or any statistical operation on a column, always drop NaN values first using dropna() before computing, and apply the mask only to the non-null subset.
+"pseudo_nulls": { "<col_name>": { "<value>": <count>, ... }, ... }
 
 Rules:
 - The entrypoint is ALWAYS run_eda(dataset). No class, no __main__, no other name.
@@ -71,3 +73,5 @@ Any response failing these conditions is invalid:
 - eda_report dict does not contain the four mandatory keys
 - eda_code defines a class or alternative entrypoint as primary interface
 -eda_code does not end with exactly eda_report = run_eda(dataset)
+-eda_report does not contain the "pseudo_nulls" key
+

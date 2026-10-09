@@ -21,7 +21,8 @@ You must:
 1. Analyze each finding in EDA_REPORT and determine the appropriate remediation
    strategy, justified by the actual statistics present (not generic heuristics).
 2. Implement the precise Pandas operations needed to resolve:
-   (a) null imputation — strategy must differ per column type and null rate
+    Before any imputation, replace all values listed in eda_report["pseudo_nulls"] with NaN using the exact counts reported by the EDA Module to justify the decision.
+   (a) null imputation — strategy must differ per column type and null rate but Columns with a null rate >= 0.8 must be dropped entirely. Columns with null rate between 0 and 0.8 must be imputed using the appropriate strategy for their type.
    (b) outlier handling — clip vs. remove vs. flag, justified by outlier count
    (c) dtype coercion — only where EDA_REPORT confirms a mismatch
 3. Synthesize the operational rules that will govern your mature self when deployed.
